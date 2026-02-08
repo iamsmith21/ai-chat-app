@@ -1,6 +1,7 @@
 import { tool } from "ai";
 import { z } from "zod";
-
+// import { execSync } from "child_process";
+import { spawnSync } from "child_process";
 /**
  * TODO: Implement the code analysis tool
  *
@@ -52,18 +53,120 @@ export const analyzeTool = tool({
   description:
     "Execute Python code for data analysis, calculations, or processing. The LLM writes Python code, and this tool runs it and returns the output.",
   parameters: z.object({
-    // TODO: Define your parameters here
-    // Example:
-    // code: z.string().describe("Python code to execute"),
+    code: z
+      .string()
+      .min(1)
+      .describe(
+        "Complete Python 3 code to execute. Should include all necessary imports and be self-contained."
+      ),
+    timeout_seconds: z
+      .number()
+      .int()
+      .min(1)
+      .max(30)
+      .default(10)
+      .describe("Maximum execution time in seconds (1-30, default 10)"),
   }),
-  execute: async (params) => {
-    // TODO: Implement the Python code execution logic
-    // 1. Extract the code from params
-    // 2. Execute it with python3
-    // 3. Return stdout, stderr, and exit code
 
-    return {
-      error: "Analysis tool not implemented yet. See TODO comments in lib/tools/analyze.ts",
-    };
+  execute: async ({ code, timeout_seconds }) => {
+    if (!code || code.trim().length === 0) {
+      return {
+        success: false,
+        error: "No code provided",
+        stdout: "",
+        stderr: "",
+        exit_code: -1,
+      };
+    }
+
+    const startTime = Date.now();
+
+    try {
+      const result = spawnSync("python3", ["-c", code], {
+        input: code,
+        timeout: timeout_seconds * 1000,
+        encoding: "utf-8",
+        maxBuffer: 1024 * 1024,
+      });
+
+      const executionTime = Date.now() - startTime;
+
+      if (result.error) {
+        const err: any = result.error;
+
+        if (err.code === "ENOENT") {
+          return {
+            success: false,
+            error: "Python 3 is not installed or not found in PATH",
+            stdout: result.stdout ?? "",
+            stderr: result.stderr ?? "python3 not found",
+            exit_code: -1,
+            execution_time_ms: executionTime,
+            help: "Install Python from https://www.python.org/downloads/",
+          };
+        }
+
+        if (err.code === "ETIMEDOUT") {
+          return {
+            success: false,
+            error: `Execution timed out after ${timeout_seconds} seconds`,
+            stdout: result.stdout ?? "",
+            stderr: result.stderr ?? "",
+            exit_code: -1,
+            execution_time_ms: executionTime,
+          };
+        }
+
+        return {
+          success: false,
+          error: "Failed to start or run Python process",
+          stdout: result.stdout ?? "",
+          stderr: result.stderr ?? (err.message ?? String(err)),
+          exit_code: -1,
+          execution_time_ms: executionTime,
+        };
+      }
+
+      const exitCode =
+        typeof result.status === "number"
+          ? result.status
+          : result.signal
+          ? -1
+          : 0;
+
+      const stdout = result.stdout ?? "";
+      const stderr = result.stderr ?? "";
+
+      if (exitCode === 0) {
+        return {
+          success: true,
+          stdout: stdout.trimEnd(),
+          stderr: stderr.trimEnd(),
+          exit_code: 0,
+          execution_time_ms: executionTime,
+        };
+      }
+
+      return {
+        success: false,
+        error: "Python execution failed",
+        stdout: stdout.trimEnd(),
+        stderr: stderr.trimEnd(),
+        exit_code: exitCode,
+        execution_time_ms: executionTime,
+      };
+    } catch (error) {
+      const executionTime = Date.now() - startTime;
+
+      return {
+        success: false,
+        error: "Unexpected error during code execution",
+        details: error instanceof Error ? error.message : String(error),
+        stdout: "",
+        stderr: "",
+        exit_code: -1,
+        execution_time_ms: executionTime,
+      };
+    }
   },
 });
